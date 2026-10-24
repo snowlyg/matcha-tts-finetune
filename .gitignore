@@ -17,3 +17,10 @@ data/tokens.txt
 summary.txt
 nohup.out
 .DS_Store
+
+# 本地工具脚本（不入库，上云用 scp 携带）
+cloud/bootstrap_gpu.sh
+scripts/gen_teacher_corpus.py
+scripts/make_record_script.py
+scripts/make_train_tokens.py
+scripts/make_warmstart_ckpt.py
