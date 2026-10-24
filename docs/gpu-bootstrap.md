@@ -33,11 +33,16 @@ torch 与卡不匹配（no kernel image）→
 `pip install --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu128`
 
 ## 4. 环境搭建
-一键版（幂等、可断点续跑，任何一步失败修完直接重跑）：
+一键版（幂等、可断点续跑；工具脚本不入库，与 bootstrap 一起 scp 上云）：
 ```bash
+# 在 Mac 上（实例路径按平台调整，AutoDL 用 root@区域端口）：
+ssh -p <端口> root@<区域> 'mkdir -p /root/tools'
+scp -p -P <端口> cloud/bootstrap_gpu.sh scripts/gen_teacher_corpus.py \
+  scripts/make_record_script.py scripts/make_train_tokens.py \
+  scripts/make_warmstart_ckpt.py out/ref_v1.wav out/ref_v1.txt root@<区域>:/root/tools/
+# 在实例上：
 export DATA=/root/autodl-tmp     # 按 df -h 确认的实际挂载点改
-cd $DATA && curl -L -O https://gh-proxy.com/https://raw.githubusercontent.com/snowlyg/matcha-tts-finetune/main/cloud/bootstrap_gpu.sh
-bash bootstrap_gpu.sh
+bash /root/tools/bootstrap_gpu.sh
 ```
 手动版（逐步核对用）：
 ```bash
