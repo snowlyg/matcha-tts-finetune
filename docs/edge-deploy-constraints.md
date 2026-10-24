@@ -16,6 +16,7 @@
 | Matcha zh-en（现网） | Apache | ✓（icefall） | ✓ RTF~1.3 | **本仓路线** |
 | Kokoro multi-lang | Apache | 弱 | ✓ 但 310MB | 音色已被否 |
 | GPT-SoVITS | MIT | ✓ 1 分钟 | ✗ 需 GPU | 只能当蒸馏老师/服务端 |
+| CosyVoice2-0.5B | Apache(代码/权重) | ✓ 但端侧跑不了 | ✗ 需 GPU、非三族 | **当蒸馏老师**（当前首选，zero-shot 产语料） |
 | Pocket zh-en | CC-BY-NC | ✗ 仅 ONNX | ✗ | 出局 |
 
 ## 微调产物怎么回端侧

@@ -12,6 +12,8 @@ __pycache__/
 *.wav
 *.jsonl.gz
 data/corpus/
+data/fbank/
+data/tokens.txt
 summary.txt
 nohup.out
 .DS_Store
