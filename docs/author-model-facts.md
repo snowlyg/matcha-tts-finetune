@@ -66,16 +66,12 @@
 - 待作者确认：其 fork 的 fbank 精确参数与语料响度规范。
 
 ## 其他候选（都出局）
-- **Pocket zh-en**（`dengcunqin/pocket-tts-zh-en-pinyin`）：CC-BY-NC（禁商用）、只发 ONNX（不可微调）、
+- **Pocket zh-en**（`dengcunqin/pocket-tts-zh-en-pinyin`）：CC-BY-NC（non-commercial）、只发 ONNX（不可微调）、
   非 sherpa 三族、24k、需 Python runtime → 不能上端侧、不能当微调基座。
 - **GPT-SoVITS / CosyVoice2 / F5-TTS / ChatTTS 等**：MIT/各异、少样本克隆强，但都是 GPT/flow 自回归、
-  需 GPU、非 sherpa 三族 → 端侧跑不了。唯一可用法：当"蒸馏老师"（先验证它对医院话术确实更准）。
+  需 GPU、非 sherpa 三族 → 端侧跑不了。唯一可用法：当"蒸馏老师"（先验证它对目标话术确实更准）。
 
-## 授权红线
-- baker 数据集 **non-commercial**；医院是商用 → 训练语料必须自录/已清权，交付前过法务。
-- 可商用替代中文数据：AISHELL-3、DiDiSpeech（均 Apache-2.0）；英文 LibriTTS/LJSpeech。
-
-## 联系作者
-`2735033883@qq.com` / 微信 `game_for_enjoy` / FunASR 群「找小邓」。
-已自证不再需要问：BOS（无）、是否 16k（是）。仍需确认：训练 fbank 精确参数与语料
-响度规范、`pytorch_model.bin` 与 sherpa 版的差别（哪份更新/是否 V2 雏形）、V2 何时发。
+## 待核实的技术问题
+- 训练 fbank 精确参数与语料响度规范（V1 的 mel buffer 与公共配置对不上，见上节）。
+- `pytorch_model.bin` 与 `pytorch_model_sherpa.bin` 的差别（哪份更新）。
+- 已自证不再需要问：BOS（无）、是否 16k（是）。

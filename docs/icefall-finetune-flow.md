@@ -1,6 +1,6 @@
 # icefall Matcha 微调流程（GPU 机 / 云端）
 
-目标：以作者 V1 pt 热启动，用自录医院话术微调，降低中文小数/轻声音节错率；
+目标：以基座 V1 pt 热启动，用自录/合成语料微调，降低中文小数/轻声音节错率；
 词表、声码器、端侧配置不变，只替换导出的 `model-steps-3.onnx`。
 
 ## 0. 环境
@@ -20,7 +20,7 @@ python scripts/prepare_data.py --corpus <录音目录> --out data
 60 句录制稿）：首试通过 ~70%，但有 8 句重试 8 次全败，全是**系统性丢音节**
 （患者李四→患者李、安排→安在），自采样修不了这类错 → 主路必须走老师模型。
 主路是 `--backend cosyvoice`（CosyVoice2 zero-shot，`--ref-wav/--ref-text` 用 V1 现网
-"温柔女声"片段定音色）——先小样本对照 ruler 基线验证老师错率 <5% 再放大产语料。
+"温柔女声"参考音色片段定音色）——先小样本对照 ruler 基线验证老师错率 <5% 再放大产语料。
 字母行（ICU 等）ASR 假错多，门控放宽、需人耳抽听。
 
 ## 2. 词表（钉死作者那份 + 补 `_ 0`）
@@ -81,4 +81,4 @@ python matcha/export_onnx.py --exp-dir matcha/exp-1 --epoch <N> \
 ## 7. 验收
 - 把导出的 `model-steps-3.onnx` 放进 `models/zh-en/`，跑 `scripts/ruler.py --n 100`，
   对比微调前后错率。达标线：中文各条 <5%、21床/字母不回归、RTF 不明显变差。
-- 通过后再走宿主项目的 HAR 出包/装机流程（端侧替换 rawfile 模型 + 清 filesDir 缓存）。
+- 通过后替换端侧 `model-steps-3.onnx` 并清模型缓存验收（见 edge-deploy-constraints.md）。

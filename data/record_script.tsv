@@ -1,4 +1,4 @@
-# 医院播报 TTS 录制稿（spoken 形式：数字/字母按实际念法写）
+# 播报 TTS 录制稿（spoken 形式：数字/字母按实际念法写）
 # 列: id <TAB> 录制文本 <TAB> 类别
 # 读法: 普通话标准、语速平稳、句间自然停顿；字母逐个念(I C U 读字母名)
 # 直接当 prepare_data / score_speaker 的 transcripts.tsv（脚本只取前两列）
