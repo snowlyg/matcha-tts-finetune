@@ -1,0 +1,10 @@
+# PC 复现 / 尺子 / 数据准备 依赖（GPU 训练另需 icefall + torch）
+numpy<2.0
+pypinyin
+soundfile
+onnxruntime
+kaldi_native_fbank
+lhotse
+urllib3
+sherpa-onnx
+# piper_phonemize 不在 PyPI 常规索引，见 setup.sh（走 gh-proxy 下 wheel）

@@ -1,0 +1,17 @@
+# 大文件/模型/产物一律不入库（授权 + 体积）
+models/
+out/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.onnx
+*.pth
+*.ckpt
+*.whl
+*.wav
+*.jsonl.gz
+data/corpus/
+summary.txt
+nohup.out
+.DS_Store
