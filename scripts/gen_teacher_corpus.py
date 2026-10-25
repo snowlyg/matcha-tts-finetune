@@ -4,12 +4,15 @@
 用途：录不到合适真人时，用合成产训练语料：
   - --backend cosyvoice：CosyVoice2 zero-shot（--ref-wav/--ref-text 定音色）；
     先用小 n 对照 ruler 基线验证老师更准，再放大产语料。
+  - --backend cosyvoice3：CosyVoice3（FunAudioLLM/Fun-CosyVoice3-0.5B），同一套门控与
+    产物格式；它多了**中文拼音 inpainting**（可显式指定多音字读法）。换不换老师不由我说，
+    由同一份 60 句对照的**首试通过率**说话（CosyVoice2 实测首试 752/1000、n=8 收 975）。
   - --backend v1：现网 matcha ONNX 拒绝采样（音色不变；只能强化它偶尔念对的，
     修不了它从念不对的）。
 
 门控：每条最多试 --n 次，SenseVoice 回读与目标文本"去调拼音"相等才收
 （ASR 同音选字不误杀；丢字/错音节仍拦；字母行只认精确匹配并放宽保留）。
-产出：--out/corpus/wav/<id>.wav + transcripts.tsv（可直接喂 prepare_data.py /
+产出：--out/wav/<id>.wav + transcripts.tsv（可直接喂 prepare_data.py /
 score_speaker.py），另写 report.log（首试通过率/最终收集率——即老师的内容错率）。
 被门控拒的音频留在 --out/rejected/<id>.wav，供人耳复核"是念错还是 ASR 误判"。
 
@@ -77,17 +80,33 @@ class V1Backend:
 
 
 class CosyVoiceBackend:
+    """CosyVoice2 / CosyVoice3 老师（同一个源码仓，两个类）。
+
+    3.0 与 2.0 的调用差异：类名不同，且 prompt 文本必须带 `<|endofprompt|>` 分隔
+    （前段是风格指令，后段才是参考音频的逐字文本）——照 2.0 的写法直接喂会得到
+    很怪的结果。这里只补一个中性指令，**是否真的更好由 60 句产出率门判定**，
+    不靠我对 API 的理解。
+    """
     name = "cosyvoice"
 
-    def __init__(self, model_dir, ref_wav, ref_text, threads):
+    def __init__(self, model_dir, ref_wav, ref_text, threads, v3=False):
         import torch  # noqa: F401  cosyvoice 依赖
-        from cosyvoice.cli.cosyvoice import CosyVoice2
+        import cosyvoice.cli.cosyvoice as cv
+        want = "CosyVoice3" if v3 else "CosyVoice2"
+        klass = getattr(cv, want, None)
+        if klass is None:
+            sys.exit(f"本地 CosyVoice 源码里没有 {want} —— 老师仓库要更新到对应版本"
+                     f"（有 {want} 的 tag），否则这轮实验换不了老师")
+        self.name = "cosyvoice3" if v3 else "cosyvoice"
+        self.v3 = v3
         self.torch = torch
-        self.m = CosyVoice2(model_dir, load_vllm=False)
+        self.m = klass(model_dir, load_vllm=False)
         # frontend_zero_shot 内部自己 load_wav(prompt_wav, 24000/16000) → 要路径，传张量会
         # 报 TypeError: Invalid file: tensor(...)
         self.ref_wav = os.path.abspath(ref_wav)
         self.ref_text = ref_text
+        if v3 and "<|endofprompt|>" not in ref_text:
+            self.ref_text = "You are a helpful assistant.<|endofprompt|>" + ref_text
 
     def __call__(self, text, attempt):
         self.torch.manual_seed(20261024 + attempt)
@@ -107,21 +126,22 @@ def resample16k(audio, sr):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--backend", choices=["v1", "cosyvoice"], default="v1")
+    ap.add_argument("--backend", choices=["v1", "cosyvoice", "cosyvoice3"], default="v1")
     ap.add_argument("--script", default=os.path.join(config.REPO, "data", "record_script.tsv"))
     ap.add_argument("--out", default=os.path.join(config.OUT, "synth_corpus"))
     ap.add_argument("--n", type=int, default=8, help="每条最多尝试次数")
     ap.add_argument("--limit", type=int, default=0, help="只处理前 N 条（验老师用）")
     ap.add_argument("--threads", type=int, default=4)
-    ap.add_argument("--model-dir", default="", help="cosyvoice: CosyVoice2-0.5B 权重目录")
+    ap.add_argument("--model-dir", default="",
+                    help="cosyvoice/cosyvoice3: 权重目录（3.0 用 FunAudioLLM/Fun-CosyVoice3-0.5B）")
     ap.add_argument("--ref-wav", default="", help="cosyvoice: 参考音色 wav")
     ap.add_argument("--ref-text", default="", help="cosyvoice: 参考音色对应文本")
     args = ap.parse_args()
 
-    # 先校验输入再加载权重：CosyVoice2 载入要 1-2 分钟，别让缺文件白等
+    # 先校验输入再加载权重：CosyVoice 载入要 1-2 分钟，别让缺文件白等
     if not os.path.isfile(args.script):
         sys.exit(f"录制稿不存在: {args.script}")
-    if args.backend == "cosyvoice":
+    if args.backend.startswith("cosyvoice"):
         for label, p in (("--model-dir", args.model_dir), ("--ref-wav", args.ref_wav)):
             if not p or not os.path.exists(p):
                 sys.exit(f"{label} 无效（文件/目录不存在）: {p!r}")
@@ -129,7 +149,8 @@ def main():
             sys.exit("--ref-text 不能为空（zero-shot 需要参考音频的念法文本）")
 
     backend = (V1Backend(args.threads) if args.backend == "v1" else
-               CosyVoiceBackend(args.model_dir, args.ref_wav, args.ref_text, args.threads))
+               CosyVoiceBackend(args.model_dir, args.ref_wav, args.ref_text, args.threads,
+                                v3=(args.backend == "cosyvoice3")))
     rec = asr.load_recognizer(args.threads)
 
     wav_dir = os.path.join(args.out, "wav")
