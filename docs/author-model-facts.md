@@ -41,6 +41,24 @@
   两个作者测试脚本均不前置特殊 token；sherpa-onnx `offline-tts-matcha-impl.h` 注释
   明确 "the zh-en model doesn't use them"（`ApplyBosEos` 对 zh-en 是直通）。
   ONNX 元数据 `use_eos_bos:1` 对 zh-en 运行时不生效，勿据此加 BOS。
+  反向同理：本仓 `matcha/export_onnx.py` 写的是 `use_eos_bos: 0`，**不要"对齐 V1"改成 1**
+  （我们的训练约定确实没有 BOS/EOS，0 才是诚实声明；1 在 zh-en 下惰性，改了也没后果）。
+
+### V1 `model-steps-3.onnx` 元数据全量（2026-10-25 从 `metadata_props` 直接 dump，共 12 键）
+导出后与这张表逐键 diff；差异只允许出现在"我们有意要改"的地方。
+```
+language        = chinese English        model_author  = dengcunqin
+model_type      = matcha-tts             version       = 1
+n_speakers      = 1                      num_ode_steps = 3
+pad_id          = 0                      sample_rate   = 16000
+use_eos_bos     = 1                      voice         = zh en-us
+demo_url        = https://www.tulingyun.com/tts.html
+modelscope_url  = https://modelscope.cn/models/dengcunqin/matcha_tts_zh_en_20251010
+```
+- `pad_id=0` 与我们 `_ 0` 词表一致；**没有 `add_blank` 键**（sherpa-onnx 靠它决定插 blank）。
+- 现网这份的 emb 是 `model.encoder.emb.weight (2190,192)`，输入 `x[N,L] int32` /
+  `x_length[N]` / `noise_scale[1]` / `length_scale[1]`，输出 `mel[N,80,L]`。
+  `export_onnx.py:190` 的 `sample_rate` 默认 **22050**，必须 sed 成 16000（第 196 行 `use_eos_bos` 已是 0）。
 - **训练从不插 blank**：ONNX 元数据无 `add_blank`，端侧 ids 直进直出且效果正常
   → 微调必须关掉 icefall 的 `intersperse_blank=True`（matcha/train.py prepare_input），
   否则导出物与现网推理语义不符。

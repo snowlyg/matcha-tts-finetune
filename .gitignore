@@ -18,9 +18,5 @@ summary.txt
 nohup.out
 .DS_Store
 
-# 本地工具脚本（不入库，上云用 scp 携带）
-cloud/bootstrap_gpu.sh
-scripts/gen_teacher_corpus.py
-scripts/make_record_script.py
-scripts/make_train_tokens.py
-scripts/make_warmstart_ckpt.py
+# 工具脚本一律入库：云端 git pull 就能拿到全套（旧规矩"scp 携带"和 pull 同步冲突，已废）。
+# 大文件/产物/资产仍不入库，由 cloud/bootstrap_gpu.sh 从公开源按清单下载。

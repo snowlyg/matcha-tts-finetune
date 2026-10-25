@@ -1,0 +1,82 @@
+diff --git a/egs/baker_zh/TTS/local/compute_fbank_baker_zh.py b/egs/baker_zh/TTS/local/compute_fbank_baker_zh.py
+index deb344d..9ccb9f7 100755
+--- a/egs/baker_zh/TTS/local/compute_fbank_baker_zh.py
++++ b/egs/baker_zh/TTS/local/compute_fbank_baker_zh.py
+@@ -67,7 +67,7 @@ def compute_fbank_baker_zh(num_jobs: int):
+     config = MatchaFbankConfig(
+         n_fft=1024,
+         n_mels=80,
+-        sampling_rate=22050,
++        sampling_rate=16000,
+         hop_length=256,
+         win_length=1024,
+         f_min=0,
+@@ -84,7 +84,7 @@ def compute_fbank_baker_zh(num_jobs: int):
+     with get_executor() as ex:  # Initialize the executor only once.
+         cuts_filename = f"{prefix}_cuts.{suffix}"
+         logging.info(f"Processing {cuts_filename}")
+-        cut_set = load_manifest(src_dir / cuts_filename).resample(22050)
++        cut_set = load_manifest(src_dir / cuts_filename).resample(16000)
+ 
+         cut_set = cut_set.compute_and_store_features(
+             extractor=extractor,
+diff --git a/egs/baker_zh/TTS/local/convert_text_to_tokens.py b/egs/baker_zh/TTS/local/convert_text_to_tokens.py
+index bf59cb4..b1bb2ec 100755
+--- a/egs/baker_zh/TTS/local/convert_text_to_tokens.py
++++ b/egs/baker_zh/TTS/local/convert_text_to_tokens.py
+@@ -105,7 +105,7 @@ def main():
+     cuts = load_manifest(args.in_file)
+     for c in cuts:
+         assert len(c.supervisions) == 1, (len(c.supervisions), c.supervisions)
+-        text = c.supervisions[0].normalized_text
++        text = getattr(c.supervisions[0], "normalized_text", None) or c.supervisions[0].text
+ 
+         text_list = split_text(text)
+         tokens = lazy_pinyin(text_list, style=Style.TONE3, tone_sandhi=True)
+diff --git a/egs/baker_zh/TTS/matcha/export_onnx.py b/egs/baker_zh/TTS/matcha/export_onnx.py
+index 702a87f..1f1adcd 100755
+--- a/egs/baker_zh/TTS/matcha/export_onnx.py
++++ b/egs/baker_zh/TTS/matcha/export_onnx.py
+@@ -152,6 +152,20 @@ def main():
+     model = get_model(params)
+     load_checkpoint(f"{params.exp_dir}/epoch-{params.epoch}.pt", model)
+ 
++    # The mel buffers saved in a warm-started checkpoint may differ from the cmvn used
++    # to normalize training features (train.py normalizes with --cmvn), which silently
++    # affine-warps the exported mel. --cmvn is the source of truth here; for a
++    # from-scratch run the two pairs are identical, so this is a no-op.
++    ckpt_mean, ckpt_std = float(model.mel_mean), float(model.mel_std)
++    if (ckpt_mean, ckpt_std) != (stats["fbank_mean"], stats["fbank_std"]):
++        logging.warning(
++            "Checkpoint mel buffers (%.4f, %.4f) differ from --cmvn (%.4f, %.4f); "
++            "overriding with --cmvn so denormalization matches training normalization."
++            % (ckpt_mean, ckpt_std, stats["fbank_mean"], stats["fbank_std"])
++        )
++        model.mel_mean.fill_(stats["fbank_mean"])
++        model.mel_std.fill_(stats["fbank_std"])
++
+     for num_steps in [2, 3, 4, 5, 6]:
+         logging.info(f"num_steps: {num_steps}")
+         wrapper = ModelWrapper(model, num_steps=num_steps)
+@@ -187,7 +201,7 @@ def main():
+             "has_espeak": 0,
+             "n_speakers": 1,
+             "jieba": 1,
+-            "sample_rate": 22050,
++            "sample_rate": 16000,
+             "version": 1,
+             "pad_id": params.pad_id,
+             "model_author": "icefall",
+diff --git a/egs/baker_zh/TTS/matcha/train.py b/egs/baker_zh/TTS/matcha/train.py
+index ed2ba49..6b3aa71 100755
+--- a/egs/baker_zh/TTS/matcha/train.py
++++ b/egs/baker_zh/TTS/matcha/train.py
+@@ -315,7 +315,7 @@ def prepare_input(batch: dict, tokenizer: Tokenizer, device: torch.device, param
+     features_lens = batch["features_lens"].to(device)
+     tokens = batch["tokens"]
+ 
+-    tokens = tokenizer.texts_to_token_ids(tokens, intersperse_blank=True)
++    tokens = tokenizer.texts_to_token_ids(tokens, intersperse_blank=False)
+     tokens = k2.RaggedTensor(tokens)
+     row_splits = tokens.shape.row_splits(1)
+     tokens_lens = row_splits[1:] - row_splits[:-1]

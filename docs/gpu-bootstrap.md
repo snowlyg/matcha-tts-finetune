@@ -22,6 +22,7 @@ SenseVoice 门控（CPU 即可）。**单卡、断续、总 10–15 GPU 时/轮�
 | 盘 | 环境/权重/checkpoint 全放数据盘 | 恒源云系统盘仅 20G |
 | 保留期 | 恒源云关机仅保留 **72h**（AutoDL 15 天） | 当天产物当天 scp 回本地 |
 | pip 源 | index 设国内镜像（TUNA/Aliyun），别让 extra-index 指向 download.pytorch.org | 实测 TUNA ~38MB/s、官方 pytorch 源 ~350KB/s |
+| k2 | 镜像自带 k2 最省事；否则要按轮子的 torch 补丁号对齐 | 训练必需，且 k2 不在 PyPI |
 
 ## 3. 开机后验证（30 秒）
 ```bash
@@ -36,12 +37,20 @@ torch 与卡不匹配（no kernel image）→ 走国内镜像重装配套版本�
 `--index-url https://mirrors.tuna.tsinghua.edu.cn/pytorch-wheels/cu128`。
 **别用 download.pytorch.org**，国内实例 ~350KB/s，一个 torch 轮子要下几十分钟。）
 
+**每次重连/重启后的第一件事**：`. $DATA/env_gpu.sh`（bootstrap §1c 已把它挂进 `~/.bashrc`）。
+`source .venv/bin/activate`、`export PYTHONPATH`、`$TTS` 都是会话级变量，新 ssh 会话里全丢，
+此时 `python` 落回镜像自带的 conda 解释器，训练脚本会报
+`ModuleNotFoundError: No module named 'k2'` —— 看着像依赖没装好，其实只是没激活 venv。
+判断方法：`which python` 必须是 `$DATA/matcha-tts-finetune/.venv/bin/python`。
+
 ## 4. 环境搭建
 一键版（幂等、可断点续跑；工具脚本不入库，与 bootstrap 一起 scp 上云）：
 ```bash
 # 在 Mac 上（实例路径按平台调整，AutoDL 用 root@区域端口）：
 ssh -p <端口> root@<区域> 'mkdir -p /root/tools'
-scp -p -P <端口> cloud/bootstrap_gpu.sh scripts/gen_teacher_corpus.py \
+scp -p -P <端口> cloud/bootstrap_gpu.sh cloud/env_gpu.sh \
+  cloud/fix_mel_buffer.py cloud/session_fix_mel.sh \
+  scripts/gen_teacher_corpus.py scripts/fix_onnx_meta.py \
   scripts/make_record_script.py scripts/make_train_tokens.py \
   scripts/make_warmstart_ckpt.py out/ref_v1.wav out/ref_v1.txt root@<区域>:/root/tools/
 # 在实例上：
@@ -68,6 +77,10 @@ python scripts/g2p.py --selftest    # 门槛：unknown_diffs=0
 cd $DATA
 git clone https://gh-proxy.com/https://github.com/k2-fsa/icefall.git
 pip install -r icefall/requirements-tts.txt
+# k2（训练必需，不在 PyPI）：先按轮子的 torch 补丁号对齐，再 --no-deps 装
+pip install "torch==2.7.1" "torchaudio==2.7.1" "torchvision==0.22.1"
+curl -fL -O "https://huggingface.co/csukuangfj2/k2/resolve/main/ubuntu-cuda/1.24.4.dev20260625/k2-1.24.4.dev20260625+cuda12.6.torch2.7.1-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+pip install --no-deps ./k2-*.whl && python -m k2.version
 git clone --recursive https://gh-proxy.com/https://github.com/FunAudioLLM/CosyVoice.git
 cd CosyVoice
 # 依赖链（勿改顺序，原因见下方"已知坑"）：constraints 只钉 torch 家族、不含 triton
@@ -86,6 +99,19 @@ pip install modelscope
 modelscope download --model iic/CosyVoice2-0.5B --local_dir pretrained_models/iic/CosyVoice2-0.5B
 ```
 已知坑：
+- **icefall clone ≠ 可导入，且 requirements-tts 不全**：配方的 `matcha/train.py` 里
+  `from icefall.utils import ...` → 要 `export PYTHONPATH=$DATA/icefall:$PYTHONPATH`；
+  而 `icefall.utils` 还 `import kaldialign`、`import sentencepiece`，这两个只在主
+  `requirements.txt` 里 → 一次装完但**滤掉 torch 家族和 k2 并配 constraints**
+  （`grep -vE '^(torch|torchaudio|torchvision|triton|k2)...' requirements.txt`），否则 torch 又被拖走。
+  同理 `matcha/monotonic_align` 是编译扩展（`prepare.sh` stage -1），不先
+  `python setup.py build_ext --inplace` 会在 `import models.matcha_tts` 处报
+  `No module named 'monotonic_align.core'`。
+- **k2 不在 PyPI**：训练必需（icefall matcha 用 `k2.SymbolTable`）。轮子在 HF `csukuangfj2/k2`，
+  且 import 时**按 torch 补丁号硬校验**——`+cuda12.6.torch2.7.1` 的轮子跑在 torch 2.7.0 上直接
+  `ImportError: k2 was built using PyTorch 2.7.1`。→ 先把 torch/torchaudio/torchvision 对齐到轮子
+  的版本，再 `pip install --no-deps <完整文件名>.whl`。副作用：升 torch 会把 triton 拉回 3.3.0，
+  openai-whisper 的 `triton<3` 警告可忽略（别用 `-c` 钉 triton，会 `ResolutionImpossible`）。
 - `monotonic_align` 编译错 → 先 `pip install cython` 再 `pip install -e third_party/Matcha-TTS`；
   piper_phonemize wheel 必须保留完整文件名再 pip 装（否则 not a valid wheel filename）。
 - **CosyVoice requirements 的 torch 未钉版本**：直接 `pip install -r requirements.txt` 会把镜像
@@ -133,3 +159,45 @@ PYTHONPATH=$DATA/CosyVoice python scripts/gen_teacher_corpus.py --backend cosyvo
 scp -r <实例>:$DATA/matcha-tts-finetune/out/... ./out/    # report/corpus/checkpoint 当天回传
 ```
 关机 ≠ 备份：恒源云 72 小时回收。训练阶段 `epoch-*.pt` 只认本地+网盘两份都算数。
+
+## 7. 换厂商重建清单（按 2026-10 这轮实际踩过的点）
+换云实例时**差异不在"装什么包"，在下面这些静默失效点**。顺序照抄，别跳。
+
+1. **先体检再动手**（`cloud/bootstrap_gpu.sh` §0 已自动化）：GPU 算力 vs torch 的 CUDA 构建
+   （Blackwell 需 cu128）、python ≥3.10、`df` 可用 ≥20G、`git`/`g++` 是否在、
+   **默认 `python3` 落在哪个解释器**（镜像常把 conda base 放 PATH 最前，脚本会 import 不到 venv 的包）。
+2. **会话环境**：`. $DATA/env_gpu.sh`（已挂进 `~/.bashrc`）；每次重连后先 `which python` 复验。
+   这一条本轮换过一次跟头：掉线后 `python` 回到 conda，报 `No module named 'k2'`，看着像依赖没装。
+3. **网络实测再选路**：`gh-proxy` 在不同厂商可从 ~8KB/s 变成不可用；HF/ModelScope/TUNA 谁通要
+   用 `curl -w '%{speed_download}'` 实测一次再决定。pip 一律 `config set global.index-url` +
+   `export PIP_EXTRA_INDEX_URL=<镜像>`（镜像常往 extra-index 塞 download.pytorch.org，~350KB/s）。
+4. **依赖链固定顺序**（勿改，理由见"已知坑"）：torch 家族先钉 → constraints 只钉 torch 家族
+   （**triton 绝不进 constraints**）→ k2 轮子（按 torch 补丁号硬校验、`--no-deps` 装）→
+   icefall requirements 过滤 torch 家族 → CosyVoice 教师链。
+5. **icefall 走 fork 分支** `snowlyg/icefall` 的 `matcha-zh-en-16k`（5 处必需改动已在树里）；
+   厂商拉不动 GitHub 时用 `patch -p1 -N --forward < patches/icefall-baker-zh-16k.patch`，
+   或把两份仓镜像到 gitcode 后从国内站 clone。**绝不在已有数据的 icefall 树里重新 clone**——
+   `data/`（cuts、特征、cmvn、tokens）和 `matcha/exp-*/` 都在树内，重拉等于删产物。
+6. **数据路径**：`prepare_data.py` 写进 cuts 的是 wav **绝对路径** → 语料必须先落到本机、
+   再在训练机上生成 cuts；换机器 cuts 即失效。
+7. **关机保留性要实测、不要假设**：本轮 compshare 的 `/root` 关机过夜后仍在（实测），
+   但别的厂商可能是临时盘。新实例第一天先做一次"关机 10 分钟再开"验证，再决定要不要每天回传。
+8. **时间**：容器常是 UTC、控制台常显示北京时间，两者不可互相推断；进度与 ETA 一律用
+   **日志时间戳 + 实测速率**算（本轮实测 4.7 秒/epoch），别拿实例 `date` 去推。
+9. **计费纪律**：长任务 `nohup` + 手动关机；控制台定时关机不可信（本轮设了 02:36 没触发，多烧 ~7h）。
+    ssh 掉线不杀任务靠 nohup，不靠 tmux 重连。
+10. **新厂商第一天必须走一遍全链冒烟**（30 句语料，<30 分钟）：prepare_data → convert → fbank →
+    1 epoch → **导出 → 出声门控**。这轮最贵的教训是门控放错位置——loss 一路降而 ruler 92.2%，
+    所以冒烟的终点是"听得出人话且 ruler 不比基线差"，不是 loss。**（待办：把这条固化成 `cloud/smoke.sh`）**
+
+## 8. 产物回传约定（云端 → 本地）
+| 要什么 | 在哪 | 为什么要 |
+|---|---|---|
+| 候选 ONNX | `cand/steps-3-*.onnx`（打包 `tar czf`） | 本地 ruler 对基线判错率 |
+| 训练日志 | `/tmp/ft*.log`、`/tmp/export-*.log` | 曲线、warning（尤其"overriding with --cmvn"） |
+| ckpt | 只取要用的那几个（~214MB/个） | 复现/继续微调 |
+| 数据侧 | `data/fbank/cmvn.json`、`data/tokens.txt`、`git rev-parse --short HEAD` | 域参数与代码版本可追溯 |
+| 语料 | `out/corpus1k.tgz` | 本地留唯一副本 |
+
+文件名要带 epoch 与厂商标识（如 `steps-3-melfix-ep300-compshare.onnx`）——同名覆盖本踩过一次：
+icefall 导出物写死 `model-steps-2..6.onnx` 落在 CWD，连导三个 epoch 后只剩最后一个。
