@@ -148,6 +148,9 @@ train_arm() {           # $1=臂名 a|b  $2=语料目录
   else
     echo "   日志无覆写告警（ckpt buffer 已与 --cmvn 一致）"
   fi
+  # 结构自检必须真的被调用（定义完忘记接是 2026-10-25 这轮自己踩的：日志里一直没出现这行）
+  cp data/fbank/cmvn.json "cand/cmvn-ab-$arm.json"
+  check_export "cand/steps-3-ab-$arm-ep$ep_num.onnx" "cand/cmvn-ab-$arm.json"
 }
 
 train_arm a "$CORPUS_A"
