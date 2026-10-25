@@ -114,7 +114,10 @@ PYEOF
 }
 
 train_arm() {           # $1=臂名 a|b  $2=语料目录
-  local arm="$1" corpus="$2" datadir="$REPO/data-ab-$arm"
+  # ⚠ 一行 `local a=.. b=$a` 在 set -u 下会炸（同行前面的赋值在 local 语句里还没生效）→ 分行写
+  local arm="$1"
+  local corpus="$2"
+  local datadir="$REPO/data-ab-$arm"
   local exp="matcha/exp-ab-$arm"
   echo ""
   echo "===== 臂 $1：$corpus ====="
