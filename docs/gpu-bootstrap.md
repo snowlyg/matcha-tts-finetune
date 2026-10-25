@@ -44,19 +44,21 @@ torch 与卡不匹配（no kernel image）→ 走国内镜像重装配套版本�
 判断方法：`which python` 必须是 `$DATA/matcha-tts-finetune/.venv/bin/python`。
 
 ## 4. 环境搭建
-一键版（幂等、可断点续跑；工具脚本不入库，与 bootstrap 一起 scp 上云）：
+一键版（幂等、可断点续跑）。**工具脚本已全部入库**，实例靠 `git pull` 就能拿到全套；
+需要 scp 的只有"拿到仓之前就得存在"的两个引导文件和不入库的参考音色：
 ```bash
 # 在 Mac 上（实例路径按平台调整，AutoDL 用 root@区域端口）：
 ssh -p <端口> root@<区域> 'mkdir -p /root/tools'
 scp -p -P <端口> cloud/bootstrap_gpu.sh cloud/env_gpu.sh \
-  cloud/fix_mel_buffer.py cloud/session_fix_mel.sh \
-  scripts/gen_teacher_corpus.py scripts/fix_onnx_meta.py \
-  scripts/make_record_script.py scripts/make_train_tokens.py \
-  scripts/make_warmstart_ckpt.py out/ref_v1.wav out/ref_v1.txt root@<区域>:/root/tools/
+  out/ref_v1.wav out/ref_v1.txt root@<区域>:/root/tools/
 # 在实例上：
 export DATA=/root/autodl-tmp     # 按 df -h 确认的实际挂载点改；默认 /root（无数据盘的实例直接用）
-bash /root/tools/bootstrap_gpu.sh
+bash /root/tools/bootstrap_gpu.sh    # 内含 clone/pull 本仓 + 拉 icefall fork 分支
+# 建完立刻验这台机器（不需要真语料，3~6 分钟）：
+bash $DATA/matcha-tts-finetune/cloud/smoke.sh
 ```
+之后日常只改本地、`git push`，实例上 `cd $REPO && git pull` 即可；
+`cloud/session_fix_mel.sh`、`cloud/fix_mel_buffer.py`、`scripts/*` 都跟着仓走，不再 scp。
 手动版（逐步核对用）：
 ```bash
 cd $DATA && git clone https://github.com/snowlyg/matcha-tts-finetune.git
@@ -186,9 +188,17 @@ scp -r <实例>:$DATA/matcha-tts-finetune/out/... ./out/    # report/corpus/chec
    **日志时间戳 + 实测速率**算（本轮实测 4.7 秒/epoch），别拿实例 `date` 去推。
 9. **计费纪律**：长任务 `nohup` + 手动关机；控制台定时关机不可信（本轮设了 02:36 没触发，多烧 ~7h）。
     ssh 掉线不杀任务靠 nohup，不靠 tmux 重连。
-10. **新厂商第一天必须走一遍全链冒烟**（30 句语料，<30 分钟）：prepare_data → convert → fbank →
-    1 epoch → **导出 → 出声门控**。这轮最贵的教训是门控放错位置——loss 一路降而 ruler 92.2%，
-    所以冒烟的终点是"听得出人话且 ruler 不比基线差"，不是 loss。**（待办：把这条固化成 `cloud/smoke.sh`）**
+10. **新厂商第一天必须走一遍全链冒烟**：`bash cloud/smoke.sh`（约 3~6 分钟，不需要真语料——
+    它自己合成 16 句占位波形把整条管线跑完）。检查项依次为 venv/import、五处 icefall 改动、
+    资产、数据链(cuts→tokens→fbank→cmvn)、热启动、A/B loss 对照、导出物结构校验
+    （`sample_rate=16000`、无 `add_blank`、**mel 常数必须等于训练那对**）、出声门控、元数据覆盖。
+    这轮最贵的教训是门控放错位置——loss 一路降而 ruler 92.2%，所以冒烟的终点是
+    "导出物里 mel 那对与 `--cmvn` 一致 + 这台机器能合成能回读"，**不是 loss**。
+    注意冒烟 [8] 的出声门控用的是 V1 本身，验的是工具链；它给出的错率就是**这台机器的基线**，
+    正式验收必须与它同机比（跨机器 ASR/线程数不可比）。
+11. **补丁能不能打上，用 dry-run 实测，不要假设**：
+    `cd $ICEFALL && patch -p1 --dry-run -N --forward < $REPO/patches/icefall-baker-zh-16k.patch`
+    （`-p1` 的基准是 icefall 仓根，在 `egs/baker_zh/TTS` 里跑会报 "File to patch"）。
 
 ## 8. 产物回传约定（云端 → 本地）
 | 要什么 | 在哪 | 为什么要 |

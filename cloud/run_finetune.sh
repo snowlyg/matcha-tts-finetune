@@ -11,6 +11,10 @@ ICEFALL="${ICEFALL:-$HOME/icefall}"
 #   cd "$ICEFALL/egs/baker_zh/TTS/matcha/monotonic_align" && python setup.py build_ext --inplace
 export PYTHONPATH="$ICEFALL:${PYTHONPATH:-}"
 CORPUS="${CORPUS:-$REPO/out/corpus1k}"      # 含 wav/ 与 transcripts.tsv（老师合成的语料；自录则指 data/corpus）
+TTS="$ICEFALL/egs/baker_zh/TTS"
+PY="${PY:-python3}"
+# ⚠ 别依赖 shell 里 source 过 env_gpu.sh：这两个变量必须在本脚本内定义，
+#    否则下面的补丁自检会在 "$TTS/..." 上全部 grep 不到文件、假报五条"缺补丁"（实为未定义变量）。
 
 # [0] icefall 必需的五处改动：正路是 clone 我们的 fork 分支 matcha-zh-en-16k（见
 #     docs/icefall-finetune-flow.md §0），下面各处 sed 都带 grep 守卫、在那份树上全部是 no-op，
@@ -178,6 +182,7 @@ ls -l cand/
 echo "[6b] 出声门控（**必须在投长训之前跑**，不是等 300 轮跑完）"
 # 首轮的血：loss 从 3.84 一路降到 1.46 很"健康"，ruler 却是 92.2% vs 基线 25.8%——
 # CFM/dur loss 对 mel 归一化域错误**完全不敏感**（它就是在歪域里拟合）。所以门控只能看声音。
+# ⚠ 默认那 5 条短语**已在训练语料里**（背题），只能当"没训坏"检查；判收益必须用 held-out 集。
 # 在实例上跑 --n 10 做"有没有救"的二分判定（SenseVoice 已在 venv、CPU 推理，几分钟）；
 # 最终对错率必须在 Mac 上与基线同机比（[7]），跨机器的 ASR 不同实现不可比。
 mkdir -p gate
@@ -187,10 +192,19 @@ GATE_SRC="${GATE_SRC:-$(ls cand/steps-3-*.onnx 2>/dev/null | head -1)}"
 [ -n "$GATE_SRC" ] || { echo "!! gate 没有候选 onnx，先跑 [6] 导出"; exit 1; }
 echo "   门控用：$GATE_SRC"
 cp "$GATE_SRC" gate/model-steps-3.onnx
-TTS_MODEL_DIR=gate "$PY" "$REPO/scripts/ruler.py" --n 10 --threads 4 | tail -8
-# 建议的节奏：先 --num-epochs 42 短训一轮（约 5 分钟）→ 跑这一步 → 错了就停下改域，
+echo "   --- 背题集（只查有没有训坏）---"
+TTS_MODEL_DIR=gate "$PY" "$REPO/scripts/ruler.py" --n 10 --threads 4 | tail -3
+echo "   --- held-out 集（判收益，基线见 [7]）---"
+TTS_MODEL_DIR=gate "$PY" "$REPO/scripts/ruler.py" --n 10 --threads 4 \
+  --phrases-file "$REPO/scripts/ruler_heldout.tsv" | tail -3
+# 建议的节奏：先 --num-epochs 42 短训一轮（约 5 分钟）→ 跑这一步 → 错了就停下改配方，
 # 对了再 --start-epoch 43 续到目标轮数。别等 300 轮跑完才发现整条 run 是废的。
 
-echo "[7] 终验：把 model-steps-3.fixed.onnx 改名放回 $REPO/models/zh-en/model-steps-3.onnx 后跑"
-echo "    python $REPO/scripts/ruler.py --n 100  对比基线（out/ruler_baseline.log：体温45%/为您自动接听59%/21床3%）"
+echo "[7] 终验（在 Mac 上跑，与基线同机才可比）"
+echo "    把 model-steps-3.fixed.onnx 改名放回 $REPO/models/zh-en/model-steps-3.onnx 后："
+echo "    python scripts/ruler.py --n 100 --phrases-file scripts/ruler_heldout.tsv"
+echo "    held-out 基线（2026-10-25，n=30，同机）：V1 字=30.0% 音=24.3%。"
+echo "    首轮微调三份候选实测：ep60 83/83、ep180 87/86、ep300 84/83 —— 全参数 lr1e-4 这套配方"
+echo "    在 held-out 上是净负收益，必须先改配方再训（依据见 docs/icefall-finetune-flow.md §7.1）。"
+echo "    只看'字'口径不够：ASR 同音选字（输液→书叶）是假错，V1 基线里占 ~6pp；两个口径一起涨才是真损伤。"
 echo "    必须同一台机器、同一套 SenseVoice 运行时才可比；RTF 也在这一步一起看。"

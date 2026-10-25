@@ -47,12 +47,13 @@ if [ ! -d matcha-tts-finetune ]; then
   git clone "$REPO_URL" || git clone "${GH}${REPO_URL}"
 fi
 cd matcha-tts-finetune
-# 工具脚本不入库：从 bootstrap 同目录携带过来（scp 时一起传）
-# 用 cp -u：源更新就覆盖。原写法"目标存在就跳过"会让实例上一直跑旧脚本。
+# 工具脚本一律入库：重跑 bootstrap 时必须把仓更新到最新，否则实例上一直是旧脚本
+# （以前这里靠"从 cloud/ 同目录携带 + 目标存在就跳过"，脚本入库后那条既多余又会压住新代码）。
+say "== 1) git pull（已有仓）=="
+git pull --ff-only || say "!! git pull 失败（本地有改动/网络不通），沿用当前树"
+git rev-parse --short HEAD
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for s in gen_teacher_corpus.py make_record_script.py make_train_tokens.py make_warmstart_ckpt.py fix_onnx_meta.py; do
-  [ -f "$HERE/$s" ] && cp -u "$HERE/$s" scripts/
-done
+# 参考素材不入库（音色 wav 属私有），只从 bootstrap 同目录或仓根取
 for f in ref_v1.wav ref_v1.txt; do
   [ -f "$HERE/$f" ] && cp -u "$HERE/$f" .
 done
@@ -228,7 +229,8 @@ pip install -q -e third_party/Matcha-TTS || {
   pip install -q cython && pip install -q -e third_party/Matcha-TTS; }
 
 # 5) 老师对照实验（60 条；ref 素材需先从本地 scp ref_v1.wav/ref_v1.txt 过来）
-say "== 5) 就绪。参考素材未就位则先 scp，然后： =="
+say "== 5) 就绪。先验这台机器：bash \$REPO/cloud/smoke.sh（全链冒烟，不需要真语料）=="
+say "==    要产语料则参考素材未就位先 scp，然后： =="
 cat <<EOF
 cd $DATA/matcha-tts-finetune && source .venv/bin/activate
 PYTHONPATH=$DATA/CosyVoice python scripts/gen_teacher_corpus.py --backend cosyvoice \\
