@@ -92,6 +92,27 @@ m=json.load(open('data/fbank/cmvn.json'))
 print('  该臂归一化对 fbank_mean=%.4f fbank_std=%.4f（导出反归一化必须同一对）' % (m['fbank_mean'], m['fbank_std']))"
 }
 
+check_export() {        # $1=导出的 onnx  $2=cmvn.json —— 归一化/反归一化必须同一对（首轮 92.2% 的病灶）
+  "$PY" - "$1" "$2" <<'PYEOF' || exit 1
+import json, onnx, sys
+import numpy as np
+f, cmvn = sys.argv[1], sys.argv[2]
+cm = json.load(open(cmvn)); mean, std = cm["fbank_mean"], cm["fbank_std"]
+g = onnx.load(f)
+md = {k.key: k.value for k in g.metadata_props}
+assert md.get("sample_rate") == "16000", md.get("sample_rate")
+assert "add_blank" not in md, "端侧见到 add_blank 就会插 blank"
+vals = np.concatenate([onnx.numpy_helper.to_array(i).ravel().astype(float)
+                       for i in g.graph.initializer
+                       if onnx.numpy_helper.to_array(i).dtype.kind == "f"])
+hit = (int(np.isclose(vals, mean, atol=1e-4).sum()), int(np.isclose(vals, std, atol=1e-4).sum()))
+v1 = (int(np.isclose(vals, -2.9522, atol=1e-4).sum()), int(np.isclose(vals, 5.4468, atol=1e-4).sum()))
+print(f"   导出物：sample_rate=16000 ✓ 无 add_blank ✓  "
+      f"本臂 mel 对({mean:.4f},{std:.4f})命中 {hit[0]}/{hit[1]}  V1 对命中 {v1[0]}/{v1[1]}")
+assert all(hit), "导出物里没有本臂训练用的 mel 常数 → 导出守卫没生效，这一臂作废"
+PYEOF
+}
+
 train_arm() {           # $1=臂名 a|b  $2=语料目录
   local arm="$1" corpus="$2" datadir="$REPO/data-ab-$arm"
   local exp="matcha/exp-ab-$arm"

@@ -42,6 +42,12 @@ python scripts/prepare_data.py --corpus <录音目录> --out data
 "温柔女声"参考音色片段定音色）——先小样本对照 ruler 基线验证老师错率 <5% 再放大产语料。
 字母行（ICU 等）ASR 假错多，门控放宽、需人耳抽听。
 
+⚠ **`--split` 默认 `0.96,0.02,0.02`，小语料上会把 valid 直接切成 0 条**（实测 16 句 → 15/0/1），
+于是 lhotse 报 `num_buckets (N) > cuts (0)`、训练起不来、导出与门控跟着连环失败——
+看起来像"这台机器不行"，其实是样本量与切分比例的问题（2026-10-25 在这台 4090 的冒烟里踩过）。
+**语料少于几百句就显式给 `--split 0.7,0.15,0.15`**（56 句 → 39/8/9），并让
+`--num-buckets ≤ valid 条数`；`cloud/smoke.sh` 已按这条改过。
+
 ## 2. 词表（钉死作者那份 + 补 `_ 0`）
 ```
 python scripts/make_train_tokens.py --vocab models/vocab_tts.txt --out "$TTS/data/tokens.txt"

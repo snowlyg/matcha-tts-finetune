@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 全链冒烟：换云厂商/新实例后**第一条要跑的命令**。它不等真语料、不等长训练，
-# 用 16 句合成波形把「数据→特征→切分→热启动→训练→导出→出声」整条管线走一遍，
+# 用 56 句合成波形把「数据→特征→切分→热启动→训练→导出→出声」整条管线走一遍，
 # 每步只验证"这条链在这台机器上能不能产出正确东西"。
 #
 # 为什么值得单独一个脚本（2026-10-25 的教训）：首轮跑完 300 epoch、loss 一路降到 1.46
@@ -87,11 +87,12 @@ for f in "$REPO/models/zh-en/model-steps-3.onnx" \
 done
 
 echo "=============================================================="
-echo "[4] 数据链：合成 16 句占位波形 -> cuts -> tokens -> fbank -> cmvn"
+echo "[4] 数据链：合成 56 句占位波形 -> cuts -> tokens -> fbank -> cmvn"
 echo "=============================================================="
 if [ ! -f "$SMOKE_CORPUS/transcripts.tsv" ]; then
   mkdir -p "$SMOKE_CORPUS/wav"
   "$PY" - "$SMOKE_CORPUS" <<'PYEOF' || { bad "生成冒语音料失败"; exit 1; }
+import itertools
 import os, sys
 import numpy as np
 import soundfile as sf
@@ -107,6 +108,13 @@ PHRASES = [
     "体重五十二点三千克", "先坐这儿歇一会儿", "药盒上有用法用量",
     "护士站电话零一二三",
 ]
+# 冒烟只需要"够切出 valid/test"的量，不需要语义：16 条真人话术 + 40 条模板×数字变体 = 56 条
+NUM = ["三点二十分", "七点四十五分", "十一点零五分", "十四点三十分",
+       "十九点十五分", "二十一点四十分", "二点五十分", "四点十分"]
+UNIT = ["复查", "换药", "给药", "抽血", "输氧"]
+WINDOW = ["三号窗口", "五号窗口", "七号窗口"]
+for k, (a, b) in enumerate(itertools.product(NUM, UNIT)):
+    PHRASES.append(f"{WINDOW[k % 3]}安排在{a}{b}")
 rng = np.random.default_rng(7)
 rows = []
 for i, t in enumerate(PHRASES):
@@ -127,7 +135,11 @@ open(os.path.join(d, "transcripts.tsv"), "w").write("\n".join(rows) + "\n")
 print("wrote", len(rows), "wav")
 PYEOF
 fi
-"$PY" "$REPO/scripts/prepare_data.py" --corpus "$SMOKE_CORPUS" --out "$REPO/data" >/tmp/smoke-prep.log 2>&1 \
+# ⚠ 必须显式给 --split：默认 "0.96,0.02,0.02" 在小语料上会把 valid 切成 **0 条**
+#   （56 条 + 0.7/0.15/0.15 → 39/8/9；默认比例下 16 条会切成 15/0/1，实测踩过），而 valid 空会让训练与导出连环崩，
+#   看起来像"这台机器不行"其实是冒烟自己的样本量问题（2026-10-25 在这台 4090 上踩过）。
+"$PY" "$REPO/scripts/prepare_data.py" --corpus "$SMOKE_CORPUS" --out "$REPO/data" \
+  --split 0.7,0.15,0.15 >/tmp/smoke-prep.log 2>&1 \
   && ok "prepare_data（g2p 前端可用、cuts 可序列化）" || { bad "prepare_data 失败，看 /tmp/smoke-prep.log"; tail -15 /tmp/smoke-prep.log; }
 mkdir -p data/manifests
 "$PY" - "$REPO" <<'PYEOF' || bad "合并 raw cuts 失败"
