@@ -1,0 +1,4 @@
+# 前端读音真值表：设备前端（jieba+pypinyin 那一套，端侧改不动）转错的词。
+# 列: 词 <TAB> 标准音节(空格分，TONE3，轻声记 5) <TAB> 依据
+# 判定方式见 scripts/check_frontend.py —— 这类错微调治不了，只能调用侧改写绕过。
+大夫	dai4 fu5	医生义读 dài fu（《现代汉语词典》）；前端给 da4 fu1

@@ -4,23 +4,23 @@
 # 默认的第二组 c/d/e 变的是配方（lr、replay 混合、冻结 CFM estimator）。
 # 臂表在 `ARMS_DEFAULT`，也可以外部传：`AB_ARMS='f|/root/out/x|--lr 2e-5;g|...'`。
 #
-# 为什么是这个实验（2026-10-25）：held-out 上三份候选全在 83~86%（V1 基线 24.3% 音口径），
-# 且损伤形态是吞字不是读错。用 scripts/duration_gate.py 量出来：ep300 输出时长是 V1 的 0.87、
-# ep60 就已经不通过门控。而语料侧实测的"秒/音节随句长单调下降"（7~9 音节 0.285 ≈ V1 的 0.284，
-# 16+ 音节 0.240）正好给出同样的 13% 缺口。`flatten_rate.py` 把语料抹平到长句档偏差 0.8%。
-# **假设能不能成立，只有对着训一轮才知道**——lr、轮数、种子、结构全锁死，只动语料。
+# 为什么换成配方三臂（2026-10-25，A/B 已结案）：A/B 只换语料语速，假设被证伪——
+# 语音时长比 A 0.992 / B 1.106（整段时长的差全在固定首尾静音上，见 flow.md §7.2），
+# 内容错率两臂一样烂（held-out 音口径 A 78.2% / B 80.6%，V1 基线 24.3%，零条改善 >5pp）。
+# 所以"教师长句赶"不是这次遗忘的机制，改语料救不回来；剩下的变量只有配方本身，
+# c/d/e 各测一个杠杆，除 extra 外与 A/B 完全同构。
 #
-# 判读（跑之前就登记，别事后编）：
-#   ① duration_gate：B 相对 V1 的中位时长比 ≥0.95 而 A 仍 <0.95 → 假设成立，语料是主因；
-#   ② held-out 音口径：B ≤ A 才有意义；若 B 仍远高于 V1 的 24.3%，说明语料语速只是共犯之一，
-#      下一步该动的是配方（lr/冻结）而不是继续修语料。
-#   两个都过才允许投长训。
+# 判据在脚本末尾的 `[ab] 判读` 里，跑之前就登记好了，不许事后挪。
 #
-# 用法（实例上，一次开机跑完；每臂约 8 分钟，两臂 + 导出 ≈ 20 分钟）：
+# 用法（实例上，一次开机跑完）。每臂耗时按 out/ab/ab.log 的时间戳卡死：臂 A 导出在 08:41、
+# 臂 B 导出在 08:45 → 建数据 + 40 轮 + 导出**一臂 ≤ 4 分钟**（0.92h 语料，4090 单卡）。
+# d 的语料 1.68h ≈ 另两臂 1.8 倍，三臂合计预估 15~20 分钟：
 #   . /root/env_gpu.sh
 #   bash $REPO/cloud/ab_rate.sh                  # 默认 40 轮
 #   AB_EPOCHS=60 bash $REPO/cloud/ab_rate.sh     # 想多留一个点就改这里
-# 语料两份都要先在实例上：out/corpus1k（原始）与 out/corpus1k_flat（抹平+复验剔除后）。
+# 语料要先在实例上：out/corpus1k（教师原始）与 out/corpus_mix（原始 + V1 自产 replay，
+# 由 scripts/mix_corpus.py 在 Mac 上合成，out/ 不入库）。开机后从 Mac 传：
+#   cd <repo> && scp -r out/corpus1k out/corpus_mix <实例>:/root/matcha-tts-finetune/out/
 set -uo pipefail
 
 REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -32,17 +32,16 @@ MD="${AB_MAX_DURATION:-60}"
 NB="${AB_NUM_BUCKETS:-10}"
 
 # 臂定义：`名字|语料目录|额外 train.py 参数`，一行一臂。
-# 第一组 A/B（只换语料语速）已跑完：**假设被证伪**——语音时长比 A 0.992 / B 1.106，
-# 整段时长的差别全在固定首尾静音上，内容错率两臂一样烂（详见 flow.md §7.2/§7.3）。
-# 所以 c/d/e 三臂**回到原始教师语料**（抹平那步已降级为可选，不再作实验基线），
-# 各测一个配方杠杆，除 extra 外完全同构（同 seed、同轮数、同 warmstart）：
-#   c 仅降 lr                —— lr 能不能单独解释这次遗忘
-#   d 降 lr + V1 自产 replay —— 数据侧回放能不能挡住遗忘
-#   e 降 lr + 冻结 CFM estimator —— 结构侧锁住生成主干，只让 encoder/dur 学
+# 已结案的两组（结论见 flow.md §7.2/§7.3/§7.4）：
+#   A/B 只换语料语速——假设被证伪（语音时长比 A 0.992 / B 1.106，差的全是固定静音）；
+#   c/d/e 只动配方（lr / replay / 冻 estimator）——**已作废**：三臂都还用着被污染的通用语料，
+#     而收益尺实测旧语料把 1..99 的床号读法吃到只剩 2 个空白位，任何"数字泛化"读数都是假的。
+# 现在这两臂用**定向数字语料**（数字取值与尺子互斥，由 cloud/run_digit_experiment.sh 组装）：
+#   f 定向数据 + lr 1e-5                    —— 数据侧对症之后，遗忘还控不控得住
+#   g 定向数据 + lr 1e-5 + 冻结 estimator   —— 把生成主干锁死，只让 encoder/dur 学数字对齐
 ARMS_DEFAULT=(
-  "c|$REPO/out/corpus1k|--lr 1e-5"
-  "d|$REPO/out/corpus_mix|--lr 1e-5"
-  "e|$REPO/out/corpus1k|--lr 1e-5 --freeze decoder.estimator"
+  "f|$REPO/out/corpus_digit|--lr 1e-5"
+  "g|$REPO/out/corpus_digit|--lr 1e-5 --freeze decoder.estimator"
 )
 if [ -n "${AB_ARMS:-}" ]; then
   IFS=';' read -r -a ARMS <<< "$AB_ARMS"        # 覆盖时用 ';' 分隔多臂，便于 shell 里传
@@ -193,24 +192,30 @@ tar czf /root/ab_onnx.tgz cand/steps-3-ab-*.onnx cand/cmvn-ab-*.json 2>/dev/null
   || tar czf /root/ab_onnx.tgz cand/steps-3-ab-*.onnx
 ls -lh /root/ab_onnx.tgz
 cat <<'EOF'
-[ab] 判读（判据在跑之前就登记在这里，不许事后挪）：
-  主对照始终是 V1 自己：held-out 音口径 24.3%、语音时长比 1.000、每条固定静音 ~0.75s。
+[ab] 判读（判据在跑之前就登记在这里，不许事后挪）——2026-10-25 版，两把尺子分工：
+  收益尺 scripts/ruler_digits.tsv（16 条，数字取值与训练集互斥，四口径实测全零）
+      V1 基线 n=40：音口径 24.1%   形态 复制12 插音14 吞并65 替换109
+      分类别：床号数字串 47% / 时间数字 21% / 剂量小数 8%（`out/heldout3/v1_digits2.log`）
+  回归尺 scripts/ruler_heldout.tsv（28 条，其中 8 条数字半背题，只用来判"有没有训坏"）
+      V1 基线 n=30：字 30.5% / 音 25.1%（`out/heldout3/v1_modes.log`）
   ⚠ 时长一律看 `duration_gate.py` 报的**语音时长比**——整段时长含固定首尾静音，
      拿它当语速已经错过一次（A/B 那轮的机制解释就是这么错的，见 flow.md §7.2）。
-  ① 不伤害门（三臂都要过）：held-out 音口径 ≤ 30%（V1 + 5pp，这 5pp 是本尺子的重采样噪声带），
+  ① 不伤害门（两臂都要过）：回归尺音口径 ≤ 30%（V1 + 5pp＝本尺重采样噪声带），
      且语音时长中位比 ∈[0.95,1.05]、无单条 <0.85。
-  ② 收益门（过了①才有资格谈）：`时间`（V1 32%）或`多音字`（V1 45%）任一类改善 ≥10pp。
-     注意 A/B 那两臂是"零条改善 >5pp"，所以这一条才是真正的门槛。
-  ③ 三臂都过不了① → 0.92h 跨引擎教师蒸馏这条路判死，转去谈调用侧文本改写或先扩语料量级再重估。
-     d 过①而 c 不过 → replay 是必需项，以后每轮都带。
-     e 明显优于 c → 遗忘主要在 CFM 主干，后续锁 estimator 只调 encoder/dur。
+  ② 收益门（过了①才有资格谈）：收益尺音口径 < 24.1% **且** 复制数、吞并数都不升。
+     只看总错率不算数——替换类里混着 ASR 正字法假错（`调整`写成`挑整`、`床`写成`传/层`）。
+  ③ 两臂都过不了① → 跨引擎教师蒸馏这条路判死（定向数据也救不了），转调用侧改写；
+     g 明显优于 f → 病在 CFM 主干被搅动，后续锁 estimator 只调 encoder/dur；
+     f、g 都过①但都不过② → 数据量级不够（600 句 ≈0.6h），要的是加句而不是换超参。
 [ab] 本地判读命令（同一台 Mac，与 V1 基线同机才可比）：
   scp -p <实例>:/root/ab_onnx.tgz /tmp/ && tar xzf /tmp/ab_onnx.tgz -C out/ab
-  for a in c d e; do
+  for a in f g; do
     d=out/ab/$a; mkdir -p $d; ln -sf $PWD/models/zh-en/vocos-16khz-univ.onnx $d/
     cp out/ab/cand/steps-3-ab-$a-ep*.onnx $d/model-steps-3.onnx
     .venv/bin/python scripts/duration_gate.py --cand $d --n 4
-    TTS_MODEL_DIR=$PWD/$d .venv/bin/python scripts/ruler.py --n 30 --threads 4 \
-      --phrases-file scripts/ruler_heldout.tsv | tail -1
+    for r in ruler_digits ruler_heldout; do
+      echo "-- $r"; TTS_MODEL_DIR=$PWD/$d .venv/bin/python scripts/ruler.py --n 40 \
+        --threads 4 --phrases-file scripts/$r.tsv | tail -3
+    done
   done
 EOF

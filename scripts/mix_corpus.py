@@ -13,11 +13,25 @@ wav 直接复制（不建硬链接）：混合语料要 tar+scp 上云，硬链�
 
 用法：
   python scripts/mix_corpus.py --out out/corpus_mix out/corpus1k_flat out/replay_v1
+
+源可以带过滤器（`目录@过滤名`），目前只有 `nodigit`：**只保留不含数字的句子**。
+定向数字实验必须用它——收益尺 `scripts/ruler_digits.tsv` 是按"数字取值互斥"设计的，
+旧语料/replay 里含数字的句子（corpus1k 975 句中有 762 句）一旦进训练集，
+尺子的数字留出立刻作废（实测：语料把 1..99 的床号读法吃到只剩两个空白位）。
+
+  python scripts/mix_corpus.py --out out/corpus_digit \
+      out/corpus_digits out/corpus1k@nodigit out/replay_v1@nodigit
 """
 import argparse
 import os
 import shutil
 import sys
+
+DIGITS = set("零一二三四五六七八九十百千万幺两0123456789")
+
+FILTERS = {
+    "nodigit": lambda text: not (DIGITS & set(text)),
+}
 
 
 def read_rows(corpus):
@@ -36,19 +50,31 @@ def read_rows(corpus):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("corpora", nargs="+")
+    ap.add_argument("corpora", nargs="+", help="语料目录，可加 @nodigit 之类的过滤器")
+    ap.add_argument("--force", action="store_true",
+                    help="允许写进已有 transcripts.tsv 的目录（默认拒绝，避免混进上一版残留 wav）")
     args = ap.parse_args()
 
+    if os.path.exists(os.path.join(args.out, "transcripts.tsv")) and not args.force:
+        sys.exit(f"!! {args.out} 已有 transcripts.tsv —— 先挪开或加 --force，"
+                 f"否则上一版的 wav 会混进来")
     os.makedirs(os.path.join(args.out, "wav"), exist_ok=True)
     LETTERS = "abcdefghijklmnopqrstuvwxyz"
-    total, dropped = 0, 0
+    total, dropped, skipped = 0, 0, 0
     out_lines = []
-    for i, corpus in enumerate(args.corpora):
+    for i, spec in enumerate(args.corpora):
+        corpus, _, fname = spec.partition("@")
+        keep = FILTERS.get(fname) if fname else None
+        if fname and keep is None:
+            sys.exit(f"!! 未知过滤器 {fname!r}（可用：{sorted(FILTERS)}）")
         rows = read_rows(corpus)
-        src = os.path.basename(corpus.rstrip("/"))
+        src = os.path.basename(corpus.rstrip("/")) + (f"@{fname}" if fname else "")
         pref = f"{LETTERS[i]}_"
         kept = 0
         for uid, text in rows:
+            if keep and not keep(text):
+                skipped += 1
+                continue
             w = os.path.join(corpus, "wav", uid + ".wav")
             if not os.path.isfile(w):
                 dropped += 1
@@ -61,12 +87,13 @@ def main():
             shutil.copy2(w, dst)
             out_lines.append(f"{new_id}\t{text}\t{src}")
             kept += 1
-        print(f"{corpus}: 收 {kept}/{len(rows)} 条（前缀 {pref}）")
+        note = f"，过滤器 {fname} 剔掉 {len(rows) - kept} 条" if fname else ""
+        print(f"{corpus}: 收 {kept}/{len(rows)} 条（前缀 {pref}）{note}")
         total += kept
 
     with open(os.path.join(args.out, "transcripts.tsv"), "w", encoding="utf-8") as f:
         f.write("\n".join(out_lines) + "\n")
-    print(f"合计 {total} 条 -> {args.out}（缺 wav 被跳过 {dropped} 条）")
+    print(f"合计 {total} 条 -> {args.out}（缺 wav 跳过 {dropped} 条，过滤掉 {skipped} 条）")
 
 
 if __name__ == "__main__":

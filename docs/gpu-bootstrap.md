@@ -171,10 +171,30 @@ V1 自产样本的 秒/音节 几乎是**平的**（0.207~0.221，各句长档�
 以致 ASR 自己丢音节，看起来像伪影）。**但用它之前先想清楚要治什么**：
 真痛点是数字串内部的音节合并/丢失，不是语速。若仍要校正，判据必须用**裁掉静音后**的时长。
 
-放量之后的必修项改成这两条：
-1. 与验收尺子求交集（整句/子串/**拼音同句**三种，命中必须为 0），难例只留在尺子里；
+放量之后的必修项改成这三条：
+1. 与验收尺子求交集，**且交集要按被考察变量的取值划**：`check_disjoint.py` 的默认口径是
+   整句 + **含数字的 ≥4 字窗口**（模板重合如"呼叫护士站"不算背题，`点四十分` 才算）。
+   旧语料实测把 1..99 的床号读法吃到只剩 `三十三`/`六十九` 两个空白位、
+   分钟/小数/小时位零空白 ⇒ **含数字的旧句要整批剔出训练集**（`mix_corpus.py @nodigit`）；
 2. 语料到手后立刻用 `duration_gate.py` 的同款能量门限统计**每条固定静音**与
-   **语音时长/音节**，别用整段长度当语速。
+   **语音时长/音节**，别用整段长度当语速；
+3. 上机前先在**新尺子上跑一遍 V1 基线并看失败构成**——第一版收益尺带人名，
+   读数被"孙丽华→斯丽华"这种人名字近音错整个带走（72.5%），数字本身全对；
+   混着两个变量做的判决不能信。
+
+### 5.2 定向数字实验（2026-10-25 起的主线，一轮总入口）
+```bash
+# Mac 侧：造话术 + 切无数字子集（都零成本），产物 data/ 入库、out/corpus_nodigit 单独 scp
+.venv/bin/python scripts/make_digit_script.py --n 600 --hold-n 16
+.venv/bin/python scripts/mix_corpus.py --out out/corpus_nodigit \
+    out/corpus1k@nodigit out/replay_v1@nodigit
+# 开机后：git pull，传素材，然后一条命令跑完整轮（合成≈60 分钟 + 训练两臂 ≈75 分钟 ≈¥2.7）
+scp out/ref_v1.wav out/ref_v1.txt <实例>:/root/matcha-tts-finetune/
+scp -r out/corpus_nodigit <实例>:/root/matcha-tts-finetune/out/
+ssh <实例> '. /root/env_gpu.sh && nohup bash $REPO/cloud/run_digit_experiment.sh > /tmp/digit.log 2>&1 &'
+```
+判据与 V1 基线数字写在 `cloud/ab_rate.sh` 尾部（收益尺 24.1%/复制12/吞并65，
+回归尺 25.1%），机制推导在 `docs/icefall-finetune-flow.md` §7.4。
 
 ## 6. 收工纪律
 ```bash
