@@ -114,8 +114,11 @@ if [ ! -d icefall ]; then
     || { say "fork 拉取失败，退回上游 + 打补丁"; git clone --depth 1 https://github.com/k2-fsa/icefall.git \
          && (cd icefall && patch -p1 -N --forward < "$PATCH"); }
 fi
-grep -q "overriding with --cmvn" icefall/egs/baker_zh/TTS/matcha/export_onnx.py || \
-  say "!! icefall 树里缺导出守卫（补丁第 5 处）——导出会沿用 ckpt 的 mel buffer，静默拉歪 mel 域"
+for chk in "overriding with --cmvn:icefall/egs/baker_zh/TTS/matcha/export_onnx.py" \
+           "if p.requires_grad]:icefall/egs/baker_zh/TTS/matcha/train.py"; do
+  pat="${chk%%:*}"; f="${chk##*:}"
+  grep -qF -- "$pat" "$f" || say "!! icefall 树缺改动「$pat」（$f）——配方或导出守卫不全会静默训坏"
+done
 grep -q "intersperse_blank=False" icefall/egs/baker_zh/TTS/matcha/train.py || \
   say "!! icefall 树里还在插 blank（补丁第 1 处没生效）"
 source "$DATA/matcha-tts-finetune/.venv/bin/activate"

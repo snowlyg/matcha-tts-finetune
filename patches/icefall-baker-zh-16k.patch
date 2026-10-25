@@ -68,10 +68,36 @@ index 702a87f..1f1adcd 100755
              "pad_id": params.pad_id,
              "model_author": "icefall",
 diff --git a/egs/baker_zh/TTS/matcha/train.py b/egs/baker_zh/TTS/matcha/train.py
-index ed2ba49..6b3aa71 100755
+index ed2ba49..8d68df3 100755
 --- a/egs/baker_zh/TTS/matcha/train.py
 +++ b/egs/baker_zh/TTS/matcha/train.py
-@@ -315,7 +315,7 @@ def prepare_input(batch: dict, tokenizer: Tokenizer, device: torch.device, param
+@@ -124,6 +124,25 @@ def get_parser():
+         help="Whether to use half precision training.",
+     )
+ 
++    parser.add_argument(
++        "--lr",
++        type=float,
++        default=None,
++        help="Override the optimizer learning rate. Default: keep the value from "
++        "get_params() (1e-4), which is meant for training from scratch; warm-started "
++        "fine-tuning on under an hour of data needs a much smaller value.",
++    )
++
++    parser.add_argument(
++        "--freeze",
++        type=str,
++        default="",
++        help="Comma-separated parameter-name prefixes to freeze, e.g. 'decoder' or "
++        "'decoder.estimator'. Names come from model.named_parameters() "
++        "(spk_emb.*, encoder.*, decoder.*). Frozen params are excluded from the "
++        "optimizer, so this really shrinks the trainable set.",
++    )
++
+     return parser
+ 
+ 
+@@ -315,7 +334,7 @@ def prepare_input(batch: dict, tokenizer: Tokenizer, device: torch.device, param
      features_lens = batch["features_lens"].to(device)
      tokens = batch["tokens"]
  
@@ -80,3 +106,46 @@ index ed2ba49..6b3aa71 100755
      tokens = k2.RaggedTensor(tokens)
      row_splits = tokens.shape.row_splits(1)
      tokens_lens = row_splits[1:] - row_splits[:-1]
+@@ -623,15 +642,41 @@ def run(rank, world_size, args):
+     logging.info(f"Number of parameters: {num_param}")
+ 
+     assert params.start_epoch > 0, params.start_epoch
++
++    if params.lr is not None:
++        params.model_args.optimizer.lr = params.lr
++        logging.info(f"Optimizer lr overridden by --lr: {params.lr}")
++
+     checkpoints = load_checkpoint_if_available(params=params, model=model)
+ 
+     model.to(device)
+ 
++    if params.freeze:
++        prefixes = tuple(p.strip() for p in params.freeze.split(",") if p.strip())
++        frozen = [n for n, _ in model.named_parameters() if n.startswith(prefixes)]
++        # An unmatching prefix would silently freeze nothing and pretend otherwise.
++        assert frozen, (
++            f"--freeze={prefixes} matched no parameter; existing top-level names are "
++            f"{sorted({n.split('.')[0] for n, _ in model.named_parameters()})}"
++        )
++        for name, p in model.named_parameters():
++            if name.startswith(prefixes):
++                p.requires_grad_(False)
++        logging.info(
++            f"Frozen {len(frozen)} parameter tensors via --freeze={prefixes}, e.g. {frozen[:3]}"
++        )
++
++    trainable = [p for p in model.parameters() if p.requires_grad]
++    logging.info(
++        f"Number of trainable parameters: {sum(p.numel() for p in trainable)} "
++        f"(total {num_param})"
++    )
++
+     if world_size > 1:
+         logging.info("Using DDP")
+         model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+ 
+-    optimizer = torch.optim.Adam(model.parameters(), **params.model_args.optimizer)
++    optimizer = torch.optim.Adam(trainable, **params.model_args.optimizer)
+ 
+     logging.info("About to create datamodule")
+ 

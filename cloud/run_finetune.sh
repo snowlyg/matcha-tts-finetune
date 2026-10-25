@@ -16,7 +16,7 @@ PY="${PY:-python3}"
 # ⚠ 别依赖 shell 里 source 过 env_gpu.sh：这两个变量必须在本脚本内定义，
 #    否则下面的补丁自检会在 "$TTS/..." 上全部 grep 不到文件、假报五条"缺补丁"（实为未定义变量）。
 
-# [0] icefall 必需的五处改动：正路是 clone 我们的 fork 分支 matcha-zh-en-16k（见
+# [0] icefall 必需的六处改动：正路是 clone 我们的 fork 分支 matcha-zh-en-16k（见
 #     docs/icefall-finetune-flow.md §0），下面各处 sed 都带 grep 守卫、在那份树上全部是 no-op，
 #     留着只为"上游裸 clone + 没打补丁"的场合仍能跑通。唯一 sed 补不了的是第 5 处导出守卫
 #     （export_onnx.py 用 --cmvn 覆写 model.mel_*）→ 缺了就必须走 fix_mel_buffer 覆写 ckpt。
@@ -24,7 +24,8 @@ for probe in "intersperse_blank=False:matcha/train.py" \
              "sampling_rate=16000:local/compute_fbank_baker_zh.py" \
              'normalized_text", None:local/convert_text_to_tokens.py' \
              '"sample_rate": 16000:matcha/export_onnx.py' \
-             "overriding with --cmvn:matcha/export_onnx.py"; do
+             "overriding with --cmvn:matcha/export_onnx.py" \
+             "if p.requires_grad]:matcha/train.py:配方开关（--lr/--freeze）"; do
   pat="${probe%%:*}"; f="${probe##*:}"
   grep -qF -- "$pat" "$TTS/$f" || echo "[warn] icefall 缺补丁：$f 里没有 $pat"
 done

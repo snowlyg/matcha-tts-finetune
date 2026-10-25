@@ -56,14 +56,15 @@ else
 fi
 
 echo "=============================================================="
-echo "[2] icefall 五处必需改动（正路是 fork 分支 matcha-zh-en-16k；缺任一都会静默训坏）"
+echo "[2] icefall 六处必需改动（正路是 fork 分支 matcha-zh-en-16k；缺任一都会静默训坏）"
 echo "=============================================================="
 cd "$TTS" || { echo "!! 没有 $TTS，先跑 bootstrap"; exit 1; }
 for probe in "intersperse_blank=False:matcha/train.py:不插 blank，否则与现网推理语义不符" \
              "sampling_rate=16000:local/compute_fbank_baker_zh.py:22050 会把 16k 语料静默上采样" \
              'normalized_text", None:local/convert_text_to_tokens.py:合成/自录语料没有 normalized_text' \
              '"sample_rate": 16000:matcha/export_onnx.py:端侧按这个键定时长/采样' \
-             "overriding with --cmvn:matcha/export_onnx.py:用训练那对覆写反归一化 buffer（首轮 92.2% 的真因）"; do
+             "overriding with --cmvn:matcha/export_onnx.py:用训练那对覆写反归一化 buffer（首轮 92.2% 的真因）" \
+             "if p.requires_grad]:matcha/train.py:没有它就调不了 lr、冻结不了参数"; do
   pat="${probe%%:*}"; rest="${probe#*:}"
   f="${rest%%:*}"; why="${rest#*:}"
   if grep -qF -- "$pat" "$f" 2>/dev/null; then

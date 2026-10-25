@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# A/B：只换**语料语速分布**，其它全一样——检验"长句被赶"是不是输出时长塌的因。
+# 多臂对照跑训练：**一次开机里只变一个东西**，其余全锁死（同 seed/轮数/warmstart/导出流程）。
+# 第一组 A/B 变的是语料语速（已跑完，结论见 docs/icefall-finetune-flow.md §7.3）；
+# 默认的第二组 c/d/e 变的是配方（lr、replay 混合、冻结 CFM estimator）。
+# 臂表在 `ARMS_DEFAULT`，也可以外部传：`AB_ARMS='f|/root/out/x|--lr 2e-5;g|...'`。
 #
 # 为什么是这个实验（2026-10-25）：held-out 上三份候选全在 83~86%（V1 基线 24.3% 音口径），
 # 且损伤形态是吞字不是读错。用 scripts/duration_gate.py 量出来：ep300 输出时长是 V1 的 0.87、
@@ -27,14 +30,33 @@ PY="${PY:-python3}"
 EP="${AB_EPOCHS:-40}"
 MD="${AB_MAX_DURATION:-60}"
 NB="${AB_NUM_BUCKETS:-10}"
-CORPUS_A="${CORPUS_A:-$REPO/out/corpus1k}"
-CORPUS_B="${CORPUS_B:-$REPO/out/corpus1k_flat}"
+
+# 臂定义：`名字|语料目录|额外 train.py 参数`，一行一臂。
+# 第一组 A/B（只换语料语速）已跑完：**假设被证伪**——语音时长比 A 0.992 / B 1.106，
+# 整段时长的差别全在固定首尾静音上，内容错率两臂一样烂（详见 flow.md §7.2/§7.3）。
+# 所以 c/d/e 三臂**回到原始教师语料**（抹平那步已降级为可选，不再作实验基线），
+# 各测一个配方杠杆，除 extra 外完全同构（同 seed、同轮数、同 warmstart）：
+#   c 仅降 lr                —— lr 能不能单独解释这次遗忘
+#   d 降 lr + V1 自产 replay —— 数据侧回放能不能挡住遗忘
+#   e 降 lr + 冻结 CFM estimator —— 结构侧锁住生成主干，只让 encoder/dur 学
+ARMS_DEFAULT=(
+  "c|$REPO/out/corpus1k|--lr 1e-5"
+  "d|$REPO/out/corpus_mix|--lr 1e-5"
+  "e|$REPO/out/corpus1k|--lr 1e-5 --freeze decoder.estimator"
+)
+if [ -n "${AB_ARMS:-}" ]; then
+  IFS=';' read -r -a ARMS <<< "$AB_ARMS"        # 覆盖时用 ';' 分隔多臂，便于 shell 里传
+else
+  ARMS=("${ARMS_DEFAULT[@]}")
+fi
 
 cd "$TTS" || { echo "!! 没有 $TTS"; exit 1; }
-for d in "$CORPUS_A" "$CORPUS_B"; do
+for spec in "${ARMS[@]}"; do
+  d="$(echo "$spec" | cut -d'|' -f2)"
   [ -d "$d/wav" ] || { echo "!! 缺语料 $d（先从 Mac 传上来）"; exit 1; }
 done
-echo "[ab] 轮数=$EP max-duration=$MD num-buckets=$NB  A=$CORPUS_A  B=$CORPUS_B"
+echo "[ab] 轮数=$EP max-duration=$MD num-buckets=$NB  臂数=${#ARMS[@]}"
+for spec in "${ARMS[@]}"; do echo "     $spec"; done
 # 训练词表由 run_finetune.sh [2] 生成；新实例上没跑过就得补，否则热启动/训练一起失败
 [ -s data/tokens.txt ] || {
   echo "[ab] 缺 data/tokens.txt，用 make_train_tokens.py 生成"
@@ -113,24 +135,28 @@ assert all(hit), "导出物里没有本臂训练用的 mel 常数 → 导出守�
 PYEOF
 }
 
-train_arm() {           # $1=臂名 a|b  $2=语料目录
+train_arm() {           # $1=臂名  $2=语料目录  $3=额外 train.py 参数（故意不加引号做词分割，只传本脚本自己写的值）
   # ⚠ 一行 `local a=.. b=$a` 在 set -u 下会炸（同行前面的赋值在 local 语句里还没生效）→ 分行写
   local arm="$1"
   local corpus="$2"
+  local extra="$3"
   local datadir="$REPO/data-ab-$arm"
   local exp="matcha/exp-ab-$arm"
   echo ""
-  echo "===== 臂 $1：$corpus ====="
-  build_data "$corpus" "$datadir" || { echo "!! 臂 $1 数据链失败，停"; exit 1; }
+  echo "===== 臂 $arm：$corpus  额外参数「$extra」 ====="
+  build_data "$corpus" "$datadir" || { echo "!! 臂 $arm 数据链失败，停"; exit 1; }
   rm -rf "$exp"; mkdir -p "$exp"
   "$PY" "$REPO/scripts/make_warmstart_ckpt.py" --bin "$REPO/models/zh-en/pytorch_model_sherpa.bin" \
     --tokens data/tokens.txt --out "$exp/epoch-1.pt" >/tmp/ab-warm-$arm.log 2>&1 || {
       echo "!! 热启动失败"; tail -8 /tmp/ab-warm-$arm.log; exit 1; }
-  # 两臂必须**同一套超参**，否则测的就不是语料：lr 用 train.py 默认值、seed 默认 42，都不传
+  # 各臂只有 `$extra` 这一处不同：seed 都用 train.py 默认 42、轮数/采样/md/warmstart 全一样
   "$PY" matcha/train.py --exp-dir "$exp" --start-epoch 2 --num-epochs $((EP + 1)) \
     --max-duration "$MD" --bucketing-sampler 1 --num-workers 4 --num-buckets "$NB" \
-    --save-every-n 20 >/tmp/ab-train-$arm.log 2>&1 || {
+    --save-every-n 20 $extra >/tmp/ab-train-$arm.log 2>&1 || {
       echo "!! 训练失败"; tail -15 /tmp/ab-train-$arm.log; exit 1; }
+  # 这两行是"参数真的生效了"的证据，不看就等于白跑：--freeze 打错前缀会静默地什么都没冻
+  grep -E "Optimizer lr overridden|Number of trainable parameters|Frozen .*parameter tensors" \
+    /tmp/ab-train-$arm.log | tail -3
   grep -E "batch 0,|Epoch $((EP + 1))," /tmp/ab-train-$arm.log | tail -2
   local ck="epoch-$((EP + 1)).pt"
   [ -f "$exp/$ck" ] || ck="$(ls "$exp"/epoch-*.pt 2>/dev/null | sed -n 's/.*epoch-\([0-9]*\)\.pt/\1/p' | sort -n | tail -1)"
@@ -153,23 +179,38 @@ train_arm() {           # $1=臂名 a|b  $2=语料目录
   check_export "cand/steps-3-ab-$arm-ep$ep_num.onnx" "cand/cmvn-ab-$arm.json"
 }
 
-train_arm a "$CORPUS_A"
-train_arm b "$CORPUS_B"
+for spec in "${ARMS[@]}"; do
+  arm="$(echo "$spec" | cut -d'|' -f1)"
+  cdir="$(echo "$spec" | cut -d'|' -f2)"
+  xarg="$(echo "$spec" | cut -d'|' -f3)"
+  train_arm "$arm" "$cdir" "$xarg"
+done
 
 echo ""
 echo "[ab] 产物："
-ls -lh cand/steps-3-ab-*.onnx
-tar czf /root/ab_onnx.tgz cand/steps-3-ab-*.onnx \
-  && ls -lh /root/ab_onnx.tgz
+ls -lh cand/steps-3-ab-*.onnx cand/cmvn-ab-*.json 2>/dev/null
+tar czf /root/ab_onnx.tgz cand/steps-3-ab-*.onnx cand/cmvn-ab-*.json 2>/dev/null \
+  || tar czf /root/ab_onnx.tgz cand/steps-3-ab-*.onnx
+ls -lh /root/ab_onnx.tgz
 cat <<'EOF'
-[ab] 下一步（在 Mac 上，两臂同机可比）：
-  scp -p <实例>:/root/ab_onnx.tgz ~/Downloads/ && tar xzf ~/Downloads/ab_onnx.tgz
-  for a in a b; do
-    d=out/ab-$a; mkdir -p $d; ln -sf $PWD/models/zh-en/vocos-16khz-univ.onnx $d/
-    cp cand/steps-3-ab-$a-ep*.onnx $d/model-steps-3.onnx
+[ab] 判读（判据在跑之前就登记在这里，不许事后挪）：
+  主对照始终是 V1 自己：held-out 音口径 24.3%、语音时长比 1.000、每条固定静音 ~0.75s。
+  ⚠ 时长一律看 `duration_gate.py` 报的**语音时长比**——整段时长含固定首尾静音，
+     拿它当语速已经错过一次（A/B 那轮的机制解释就是这么错的，见 flow.md §7.2）。
+  ① 不伤害门（三臂都要过）：held-out 音口径 ≤ 30%（V1 + 5pp，这 5pp 是本尺子的重采样噪声带），
+     且语音时长中位比 ∈[0.95,1.05]、无单条 <0.85。
+  ② 收益门（过了①才有资格谈）：`时间`（V1 32%）或`多音字`（V1 45%）任一类改善 ≥10pp。
+     注意 A/B 那两臂是"零条改善 >5pp"，所以这一条才是真正的门槛。
+  ③ 三臂都过不了① → 0.92h 跨引擎教师蒸馏这条路判死，转去谈调用侧文本改写或先扩语料量级再重估。
+     d 过①而 c 不过 → replay 是必需项，以后每轮都带。
+     e 明显优于 c → 遗忘主要在 CFM 主干，后续锁 estimator 只调 encoder/dur。
+[ab] 本地判读命令（同一台 Mac，与 V1 基线同机才可比）：
+  scp -p <实例>:/root/ab_onnx.tgz /tmp/ && tar xzf /tmp/ab_onnx.tgz -C out/ab
+  for a in c d e; do
+    d=out/ab/$a; mkdir -p $d; ln -sf $PWD/models/zh-en/vocos-16khz-univ.onnx $d/
+    cp out/ab/cand/steps-3-ab-$a-ep*.onnx $d/model-steps-3.onnx
     .venv/bin/python scripts/duration_gate.py --cand $d --n 4
-    .venv/bin/python scripts/ruler.py --n 30 --phrases-file scripts/ruler_heldout.tsv \
-      ; done   # 后一条要带 TTS_MODEL_DIR=$d
-判据：A 应仍不通过（复现塌），B 若通过或显著好转 → 语料语速是主因，按抹平后的语料投正式微调；
-B 若仍不通过 → 语速只是共犯，下一刀落在配方（lr/冻结 decoder），别再改语料。
+    TTS_MODEL_DIR=$PWD/$d .venv/bin/python scripts/ruler.py --n 30 --threads 4 \
+      --phrases-file scripts/ruler_heldout.tsv | tail -1
+  done
 EOF
