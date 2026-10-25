@@ -156,6 +156,27 @@ PYTHONPATH=$DATA/CosyVoice python scripts/gen_teacher_corpus.py --backend cosyvo
 判定：`report.log` 错率 **<5% 才放大产语料**（V1 基线 ~28%）；抽 5 条人耳听音色。
 不达标 → 换 GPT-SoVITS 后端再测（脚本加 backend 即可）。
 
+### 5.1 放量之后必须做的语速校正（首轮训坏的机制，2026-10-25 结案）
+CosyVoice2 老师**句子越长越赶**，实测语料的 秒/音节：7~9 音节 0.285（≈V1 自身 0.284）、
+13~15 音节 0.255、16~18 音节 0.240，而 >10 音节的句子占了 **59% 的音节量**。
+matcha 的 duration 头学到的就是"长句要快"，导出物每条输出中位只有 V1 时长的 **0.87**
+（正好等于长句那 12~15% 的缺口），音节被挤出窗外 → 表现为吞字。
+所以语料到手后在 **Mac 上**跑一次（纯 DSP，不占 GPU）：
+```bash
+.venv/bin/python scripts/flatten_rate.py --corpus out/corpus1k --out out/corpus1k_flat
+# 默认 n_fft=512/hop=128、--max-stretch 1.6、跑完自动用生产门全库复验并剔除新失败句
+```
+本轮实测：长句档相对目标偏差 15.0% → **0.8%**；975 → 922 句（剔除 5.4%），
+总时长 0.92h → **0.96h**；剔除的 wav 留在 `rejected/` 可人耳复核。
+两个反直觉点：
+- **窗长是主因之一**：librosa 默认 `n_fft=2048`（16k 下 128ms）糊掉辅音瞬态，同批极端句
+  只过 59/80；换 512 后 39/40。别一看失败就归给"拉伸不行"。
+- **`--max-stretch` 截太狠会伪装成伪影**：截到 1.25 时长句仍然太快，ASR 自己在快语上丢音节。
+  选型数据（pv512 / pv1024 / SOLA / 变调 四法的 ASR 通过率 + 频谱距离）用
+  `scripts/rate_correction_lab.py` 复现。
+校正完必须复验两件事：**曲线平**（脚本自己打表）与**内容没坏**（生产门复验 + 剔除）。
+之后 `cloud/ab_rate.sh` 用同一套超参对训 A=原语料 / B=校正语料，判据见该脚本头部。
+
 ## 6. 收工纪律
 ```bash
 scp -r <实例>:$DATA/matcha-tts-finetune/out/... ./out/    # report/corpus/checkpoint 当天回传

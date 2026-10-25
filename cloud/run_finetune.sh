@@ -192,6 +192,11 @@ GATE_SRC="${GATE_SRC:-$(ls cand/steps-3-*.onnx 2>/dev/null | head -1)}"
 [ -n "$GATE_SRC" ] || { echo "!! gate 没有候选 onnx，先跑 [6] 导出"; exit 1; }
 echo "   门控用：$GATE_SRC"
 cp "$GATE_SRC" gate/model-steps-3.onnx
+echo "   --- 时长门控（最先看这个：它比 ASR 早暴露 duration 头塌掉）---"
+# 首轮病灶就是输出被整体压快（ep300 中位只有 V1 的 0.875），ASR 错率要几十次采样才显形，
+# 而时长比一次合成就能算。判据跑前登记：中位 ∈[0.95,1.05] 且无单条 <0.85。
+"$PY" "$REPO/scripts/duration_gate.py" --cand gate --n 2 --threads 4 | tail -6 || \
+  echo "   [不通过] 时长塌了 → 先查语料语速分布（scripts/flatten_rate.py），别加轮数"
 echo "   --- 背题集（只查有没有训坏）---"
 TTS_MODEL_DIR=gate "$PY" "$REPO/scripts/ruler.py" --n 10 --threads 4 | tail -3
 echo "   --- held-out 集（判收益，基线见 [7]）---"
