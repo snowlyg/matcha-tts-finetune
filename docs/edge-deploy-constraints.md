@@ -26,9 +26,12 @@
 （`OfflineTtsZipvoiceModelConfig` + `GenerationConfig.reference_audio`）→ **必须改 App 并重编译**，
 "只换 `model-steps-3.onnx`"这条产品前提不成立；② 它是 zero-shot 克隆，音色不是现网那个。
 
-**还剩一个没查的开关**（现在已不影响结论，只是完整性）：设备上那份 sherpa-onnx 的构建版本。
-**真机是开源鸿蒙（OpenHarmony）设备，不是 Android**——工具链是 `hdc` 而不是 `adb`，产物是
-`.hap`/native `.so` 而不是 `.apk`，别照 Android 的路径猜。查法见 `docs/device-runtime-check.md`。
+**端侧运行时已取证（2026-10-26，真机）**：`libsherpa-onnx-c-api.so` → **sherpa-onnx 1.12.18**；
+生产模型目录带 `lexicon.txt`(68,037 行，47,113 行是多音节短语)、`tokens.txt`(与训练词表 md5 相同)、
+`number-zh.fst / date-zh.fst / phone-zh.fst`、`espeak-ng-data/`，**没有 `dict/`**。
+两条含义：① 短语级发音覆盖**可以下发**（≥v1.12.10 支持短语最长匹配，≥v1.12.16 支持多份词典）；
+② v1.12.15 起上游已把 jieba 从 matcha 前端移除、改用对 `lexicon.txt` 的最长匹配，
+所以**本仓那套 jieba+pypinyin 复刻不等于设备前端**——取证细节与影响见 `docs/device-runtime-check.md`。
 
 ## 各模型端侧可行性
 
