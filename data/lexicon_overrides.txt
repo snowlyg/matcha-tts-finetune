@@ -1,0 +1,2 @@
+# 由 scripts/make_lexicon_overrides.py 从 pronunciation_overrides.tsv 生成，勿手改
+大夫 dai4 fu5

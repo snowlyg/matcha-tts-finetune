@@ -124,12 +124,26 @@ def build_zipvoice(model_dir, ref_wav, ref_text, threads):
     return synth, tts.sample_rate
 
 
+def norm_to(audio, peak):
+    """只改增益、不改时长：给 ASR 一个和 V1 同响度的输入。
+
+    为什么需要：微调导出物的输出比 V1 轻 ~32 dB（RMS 0.0026 vs 0.104），而 ASR 在
+    过轻输入上会大量丢字——不扣除这一项，"错率"里混着"听不清"，不能归因给模型。
+    """
+    if not peak:
+        return audio
+    m = float(np.abs(audio).max())
+    return audio if m < 1e-9 else audio * (peak / m)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--n", type=int, default=30)
     ap.add_argument("--phrases-file", default="")
     ap.add_argument("--sample-out", default="")
+    ap.add_argument("--norm", type=float, default=0.0,
+                    help="回读前把音频峰值归一到该值（0=不归一），用来分离\"太轻听不清\"与\"念错\"")
     ap.add_argument("--engine", choices=["matcha", "zipvoice"], default="matcha",
                     help="matcha=现网/候选 V1 契约；zipvoice=换整个模型的对照（自带前端）")
     ap.add_argument("--zipvoice-dir", default="")
@@ -183,7 +197,7 @@ def main():
                 import soundfile as sf
                 sf.write(os.path.join(args.sample_out, rp.safe(feed) + ".wav"),
                          audio, sr, "PCM_16")
-            heard = asr.transcribe(rec, audio, sr)
+            heard = asr.transcribe(rec, norm_to(audio, args.norm), sr)
             cnt[heard] += 1
             if asr.norm(heard) != expn:
                 err += 1
