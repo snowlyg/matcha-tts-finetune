@@ -9,7 +9,10 @@
     期望文本 <TAB> wav 路径 [<TAB> 类别]
 用法：
     python scripts/score_wavs.py --manifest out/device/C05.tsv
-同一份清单跑一次即可；要比两个条件就各写一份清单（期望列相同，只有路径不同）。
+同一份清单跑一次即可；要比两个条件就各写一份清单（期望列相同，只有路径不同）——
+或用 `data/punct_cases.tsv` 由 `scripts/device/pull_and_manifest.sh` 自动生成。
+除了两个口径的错率，还按类别报**叠字**（期望里没有、听到却有的相邻同音节，带调比较）：
+A/B 要把错率和叠字两列一起看，错率降了但叠字涨 = 边界只是换了错误的类型。
 """
 import argparse
 import collections
@@ -19,6 +22,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import asr
 from ruler import error_modes
+
+
+def dup_pairs(seq):
+    """相邻同音节的对数——"叠字"就按这个数，不用对齐结果。
+
+    为什么不用 `ruler.error_modes` 的"复制"：那个口径要求插入落在期望序列的邻位，
+    真机上 `服用后请请漱口` 会被 SequenceMatcher 并成一个 replace 块，于是记成"替换+插音"、
+    复制=0（实测过），而耳朵听到的确实是叠字。这里要回答的是"这次合成多念了一个一样的音节没"，
+    和"偏差怎么对齐"是两个问题。`error_modes` 的口径保持不动（已发出去的百分比靠它）。
+    """
+    return sum(1 for i in range(len(seq) - 1) if seq[i] == seq[i + 1])
 
 
 def main():
@@ -47,7 +61,7 @@ def main():
     rec = asr.load_recognizer(args.threads)
     tot_err = tot_err_py = tot_n = 0
     mode_tot = collections.Counter()
-    cat = collections.defaultdict(lambda: [0, 0])
+    cat = collections.defaultdict(lambda: [0, 0, 0])
     for exp, path, tag in rows:
         audio, sr = sf.read(path, dtype="float32")
         if audio.ndim > 1:
@@ -67,17 +81,22 @@ def main():
                 modes[k] += v
         tot_err += e; tot_err_py += ep; tot_n += 1
         mode_tot.update(modes)
-        cat[tag][0] += 1; cat[tag][1] += ep
+        # 第 3 列是"新增叠字"：期望里没有相邻重复，听到却有，就是这次合成多念出来的
+        # （拆段会带来这一类，见 docs/device-runtime-check.md 的四档 A/B）。
+        new_dup = max(0, dup_pairs(hp) - dup_pairs(expp))
+        cat[tag][0] += 1; cat[tag][1] += ep; cat[tag][2] += new_dup
         mark = "OK " if not ep else "ERR"
-        print(f"[{mark} {tag}] {os.path.basename(path)}  {round(len(audio)/sr, 2)}s")
+        dup = f" 叠字+{new_dup}" if new_dup else ""
+        print(f"[{mark} {tag}] {os.path.basename(path)}  {round(len(audio)/sr, 2)}s{dup}")
         print(f"      期望 {exp}\n      听到 {heard}")
     if tot_n:
         print(f"\nTOTAL n={tot_n}  字口径 err={tot_err} = {tot_err/tot_n*100:.1f}%"
               f"   音口径 err={tot_err_py} = {tot_err_py/tot_n*100:.1f}%")
         print("形态合计(按音节):", " ".join(f"{k}={mode_tot[k]}"
                                           for k in ("复制", "插音", "吞并", "替换")))
-        print("分类别音口径:", "  ".join(f"{k}={v[1]/v[0]*100:.0f}%(n={v[0]})"
-                                      for k, v in sorted(cat.items(), key=lambda kv: -kv[1][1]/kv[1][0])))
+        print("分类别:", "  ".join(f"{k} 音口径错={v[1]/v[0]*100:.0f}% 叠字={v[2]} (n={v[0]})"
+                                for k, v in sorted(cat.items(), key=lambda kv: -kv[1][1] / kv[1][0])))
+        print("     ↑ A/B 两列一起看：错率降了但叠字涨了，说明边界是把错误换了个类型，不是修好了。")
 
 
 if __name__ == "__main__":
